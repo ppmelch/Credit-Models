@@ -7,3 +7,4 @@ if __name__ == "__main__":
     game = Game(maze, player, max_attempts=3)
 
     game.play()
+
