@@ -35,8 +35,8 @@ class Altman(RiskModel):
     # =====================================================
     def _select_model(self, ticker):
 
-        sector = self.companies.sectors[ticker]
-        industry = self.companies.industries[ticker]
+        sector = self.companies.sector(ticker)
+        industry = self.companies.industry(ticker)
 
         manufacturing = {
             "Industrials",
@@ -71,83 +71,16 @@ class Altman(RiskModel):
     # =====================================================
     def _compute_ratios(self, ticker):
 
-        if ticker in self._ratio_cache:
-            return self._ratio_cache[ticker]
+        fs = self.companies
 
-        income = self.companies.income_statements[ticker]
-        balance = self.companies.balance_sheets[ticker]
-        market = self.companies.market_data[ticker]
+        X1 = fs.working_capital(ticker) / fs.total_assets(ticker)
+        X2 = fs.retained_earnings(ticker) / fs.total_assets(ticker)
+        X3 = fs.ebit(ticker) / fs.total_assets(ticker)
+        X4 = fs.market_equity(ticker) / fs.total_liabilities(ticker)
+        X5 = fs.sales(ticker) / fs.total_assets(ticker)
 
-        if income is None or balance is None or market is None:
-            raise ValueError(f"{ticker}: Missing financial data")
+        return X1, X2, X3, X4, X5
 
-        bs = balance.iloc[:, 0]
-
-        # ---------- Balance Sheet ----------
-        total_assets = self._get_item(
-            bs,
-            ["Total Assets", "TotalAssets"],
-            ticker
-        )
-
-        total_liabilities = self._get_item(
-            bs,
-            [
-                "Total Liabilities",
-                "Total Liab",
-                "Total Liabilities Net Minority Interest",
-                "TotalLiabilitiesNetMinorityInterest"
-            ],
-            ticker
-        )
-
-        current_assets = self._get_item(
-            bs,
-            ["Current Assets"],
-            ticker
-        )
-
-        current_liabilities = self._get_item(
-            bs,
-            ["Current Liabilities"],
-            ticker
-        )
-
-        retained_earnings = self._get_item(
-            bs,
-            ["Retained Earnings"],
-            ticker
-        )
-
-        working_capital = current_assets - current_liabilities
-
-        # ---------- Market ----------
-        market_equity = market["market_cap"]
-
-        # ---------- Income Statement ----------
-        inc = income["TTM"]
-
-        ebit = self._get_item(
-            inc,
-            ["EBIT", "Operating Income"],
-            ticker
-        )
-
-        sales = self._get_item(
-            inc,
-            ["Total Revenue", "Revenue"],
-            ticker
-        )
-
-        # ---------- Ratios ----------
-        X1 = working_capital / total_assets
-        X2 = retained_earnings / total_assets
-        X3 = ebit / total_assets
-        X4 = market_equity / total_liabilities
-        X5 = sales / total_assets
-
-        self._ratio_cache[ticker] = (X1, X2, X3, X4, X5)
-        return self._ratio_cache[ticker]
 
     # =====================================================
     # COMPUTE Z SCORE

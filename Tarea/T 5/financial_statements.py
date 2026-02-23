@@ -1,9 +1,13 @@
-from libraries import pd, yf
+from libraries import pd, yf , np
 from data_processing import download_prices
+
 
 
 class Companies:
 
+    # =====================================================
+    # INIT
+    # =====================================================
     def __init__(self, tickers, interval="1y"):
 
         self.tickers = [t.upper() for t in tickers]
@@ -13,19 +17,44 @@ class Companies:
         self._income_stmt = {}
         self._balance_sheet = {}
         self._cashflow = {}
+        self._market_data = {}
 
-    # ---------- Prices ----------        
-    
+        # cache yf objects
+        self._yf = {
+            t: yf.Ticker(t)
+            for t in self.tickers
+        }
+
+    # =====================================================
+    # INTERNAL RESOLVER (CORE)
+    # =====================================================
+    def _resolve(self, series, names, ticker):
+
+        for n in names:
+            if n in series.index:
+                return series.loc[n]
+
+        raise KeyError(
+            f"{ticker} → Missing {names}"
+        )
+
+    # =====================================================
+    # PRICES
+    # =====================================================
     @property
     def prices(self):
+
         if self._prices is None:
-            self._prices = download_prices(self.tickers, self.interval)
+            self._prices = download_prices(
+                self.tickers,
+                self.interval
+            )
+
         return self._prices
 
-    # ---------- Financial Statements ----------
-
-
-    
+    # =====================================================
+    # RAW FINANCIAL STATEMENTS
+    # =====================================================
     @property
     def income_statements(self):
 
@@ -34,31 +63,20 @@ class Companies:
             for t in self.tickers:
 
                 try:
-                    ticker = yf.Ticker(t)
+                    ticker = self._yf[t]
 
-                    # ---------- Annual ----------
                     annual = ticker.income_stmt
-
-                    # ---------- Quarterly ----------
                     quarterly = ticker.quarterly_income_stmt
 
                     if quarterly is not None and not quarterly.empty:
 
-                        # construir TTM
                         ttm = quarterly.iloc[:, :4].sum(axis=1)
+                        ttm = pd.DataFrame(ttm, columns=["TTM"])
 
-                        # convertir a dataframe
-                        ttm = pd.DataFrame(
-                            ttm,
-                            columns=["TTM"]
-                        )
-
-                        # unir annual + TTM
                         income = pd.concat(
                             [ttm, annual],
                             axis=1
                         )
-
                     else:
                         income = annual
 
@@ -68,7 +86,7 @@ class Companies:
                     self._income_stmt[t] = None
 
         return self._income_stmt
-        
+
 
     @property
     def balance_sheets(self):
@@ -77,8 +95,8 @@ class Companies:
 
             for t in self.tickers:
                 try:
-                    ticker = yf.Ticker(t)
-                    self._balance_sheet[t] = ticker.balance_sheet
+                    self._balance_sheet[t] = \
+                        self._yf[t].balance_sheet
                 except Exception:
                     self._balance_sheet[t] = None
 
@@ -86,30 +104,14 @@ class Companies:
 
 
     @property
-    def cashflows(self):
-
-        if not self._cashflow:
-
-            for t in self.tickers:
-                try:
-                    ticker = yf.Ticker(t)
-                    self._cashflow[t] = ticker.cashflow
-                except Exception:
-                    self._cashflow[t] = None
-
-        return self._cashflow
-    
-    @property
     def market_data(self):
 
-        if not hasattr(self, "_market_data"):
-
-            self._market_data = {}
+        if not self._market_data:
 
             for t in self.tickers:
+
                 try:
-                    ticker = yf.Ticker(t)
-                    info = ticker.info
+                    info = self._yf[t].info
 
                     self._market_data[t] = {
                         "market_cap": info.get("marketCap"),
@@ -122,23 +124,126 @@ class Companies:
                     self._market_data[t] = None
 
         return self._market_data
-    
-    @property
-    def sectors(self):
 
-        return {
-            t: self.market_data[t]["sector"]
-            for t in self.tickers
-            if self.market_data[t] is not None
-        }
-        
-    @property
-    def industries(self):
-
-        return {
-            t: self.market_data[t]["industry"]
-            for t in self.tickers
-            if self.market_data[t] is not None
-        }
-        
+    # =====================================================
+    # SHORTCUTS
+    # =====================================================
+    def _bs(self, ticker):
+        bs = self.balance_sheets.get(ticker)
+        if bs is None or bs.empty:
+            raise ValueError(f"{ticker}: Balance sheet unavailable")
+        return bs.iloc[:, 0]
     
+    def _inc(self, ticker):
+
+        inc = self.income_statements.get(ticker)
+
+        if inc is None or inc.empty:
+            raise ValueError(f"{ticker}: Income statement unavailable")
+
+        if "TTM" not in inc.columns:
+            raise ValueError(f"{ticker}: Missing TTM data")
+
+        return inc["TTM"]
+    # =====================================================
+    # ===== FINANCIAL VARIABLES API ====
+    # =====================================================
+
+    def total_assets(self, ticker):
+
+        return self._resolve(
+            self._bs(ticker),
+            ["Total Assets", "TotalAssets"],
+            ticker
+        )
+
+    def total_liabilities(self, ticker):
+
+        return self._resolve(
+            self._bs(ticker),
+            [
+                "Total Liabilities",
+                "Total Liab",
+                "Total Liabilities Net Minority Interest"
+            ],
+            ticker
+        )
+
+    def total_debt(self, ticker):
+
+        bs = self._bs(ticker)
+
+        short_debt = 0
+        long_debt = 0
+
+        if "Short Long Term Debt" in bs.index:
+            short_debt = bs.loc["Short Long Term Debt"]
+
+        if "Long Term Debt" in bs.index:
+            long_debt = bs.loc["Long Term Debt"]
+
+        return short_debt + 0.5 * long_debt
+
+    def current_assets(self, ticker):
+
+        return self._resolve(
+            self._bs(ticker),
+            ["Current Assets"],
+            ticker
+        )
+
+    def current_liabilities(self, ticker):
+
+        return self._resolve(
+            self._bs(ticker),
+            ["Current Liabilities"],
+            ticker
+        )
+
+    def retained_earnings(self, ticker):
+
+        return self._resolve(
+            self._bs(ticker),
+            ["Retained Earnings"],
+            ticker
+        )
+
+    def working_capital(self, ticker):
+
+        return (
+            self.current_assets(ticker)
+            - self.current_liabilities(ticker)
+        )
+
+    def ebit(self, ticker):
+
+        return self._resolve(
+            self._inc(ticker),
+            ["EBIT", "Operating Income"],
+            ticker
+        )
+
+    def sales(self, ticker):
+        return self._resolve(
+            self._inc(ticker),
+            ["Total Revenue", "Revenue"],
+            ticker
+        )
+
+    def market_equity(self, ticker):
+        return self.market_data[ticker]["market_cap"]
+    
+    def equity_value(self, ticker):
+        return self.market_equity(ticker)
+    
+        
+    def equity_volatility(self, ticker):
+        prices = self.prices[ticker]["Adj Close"]
+        returns = np.log(prices / prices.shift(1)).dropna()
+        return returns.std() * np.sqrt(252)
+
+    def sector(self, ticker):
+        return self.market_data[ticker]["sector"]
+
+    def industry(self, ticker):
+        return self.market_data[ticker]["industry"]
